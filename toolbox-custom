@@ -1,0 +1,93 @@
+#!/usr/bin/env python3
+
+import os
+import sys
+import argparse
+import configparser
+import subprocess
+
+from pathlib import Path
+from jinja2 import Environment, FileSystemLoader, StrictUndefined, meta
+
+
+def main():
+    conf_dir = Path.home() / ".config" / "toolbox-custom"
+    files_dir = conf_dir / "files"
+    release = None
+
+    config = configparser.ConfigParser()
+    config.read(conf_dir / "toolbox-custom.conf")
+    tmpl_vars = dict()
+    if "vars" in config.sections():
+        tmpl_vars.update(config["vars"])
+    if "release" in tmpl_vars:
+        release = tmpl_vars["release"]
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("template")
+    parser.add_argument("--release", default=None)
+    parser.add_argument("--var", nargs="?", help="vars for the template in --var variable:value format", default={})
+    parser.add_argument("--print", default=False, action="store_true", help="only print the resulting Containerfile")
+    args = parser.parse_args()
+    tmpl_vars.update({i.split(":", 1)[0]: i.split(":", 1)[1] for i in args.var})
+    if args.release is not None:
+        tmpl_vars["release"] = args.release
+        release = args.release
+
+    # get template vars to fill and try to fill them
+    env = Environment(loader=FileSystemLoader(conf_dir), undefined=StrictUndefined)
+    parsed_content = env.parse(env.loader.get_source(env, args.template)[0])
+    req_vars = meta.find_undeclared_variables(parsed_content)
+
+    missing = [i for i in req_vars if i not in tmpl_vars]
+    if missing:
+        msg_lines = [
+                f"These vars need to be provided in configfile or CLI to fill the template: {" ".join(missing)}",
+                "",
+                parser.format_usage(),
+        ]
+        print("\n".join(msg_lines), file=sys.stderr)
+        sys.exit(1)
+
+    cf = env.get_template(args.template).render(tmpl_vars)
+
+    if args.print:
+        print(cf)
+        return
+
+
+    # rebuild the image
+    cache_dir = Path.home() / ".cache" / "toolbox-custom"
+    os.makedirs(cache_dir, exist_ok=True)
+    if release is not None:
+        rel_tag = f":{release}"
+        rel_suffix = f"-{release}"
+    else:
+        rel_tag = ""
+        rel_suffix = ""
+
+    image_name = f"toolbox-custom/{args.template}{rel_tag}"
+    cont_name = f"toolbox-custom-{args.template}{rel_suffix}"
+
+    with open(cache_dir / args.template, "w+") as f:
+        f.write(cf)
+
+    podman_cli = [
+            "podman",
+            "build",
+            "--squash",
+            "--tag",
+            image_name,
+            "-f",
+            f.name,
+            files_dir
+    ]
+
+    # TODO: build first and remove second
+    subprocess.run(["toolbox", "rmi", "--force", image_name], check=True)
+    subprocess.run(podman_cli, check=True)
+    subprocess.run(["toolbox", "create", "--image", image_name, cont_name], check=True)
+
+
+if __name__ == "__main__":
+    main()
