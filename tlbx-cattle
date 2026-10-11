@@ -1,0 +1,353 @@
+#!/usr/bin/env python3
+
+import os
+import sys
+import argparse
+import concurrent.futures
+import json
+import logging
+import subprocess
+import shutil
+
+from configparser import ConfigParser, ExtendedInterpolation, InterpolationMissingOptionError
+from jinja2 import Environment, FileSystemLoader, StrictUndefined, meta
+import jinja2.exceptions
+from pathlib import Path
+
+import pprint
+def pp(*args, **kw):
+    kw["width"] = shutil.get_terminal_size().columns
+    pprint.pp(*args, **kw)
+
+
+class PodmanBuildError(Exception):
+    pass
+
+
+def parse_podman_images() -> dict:
+    """Parse podman image list JSON and return dict keyed by image ID."""
+    cli = ["podman", "images", "--format", "json"]
+    result = subprocess.run(cli, capture_output=True, text=True, check=True)
+    try:
+        images_data = json.loads(result.stdout)
+    except json.JSONDecodeError as e:
+        logging.error(f"Failed to parse podman images JSON: {e}")
+        return {}
+
+    images = {}
+    for img in images_data:
+        img_id = img.get("Id")
+        images[img_id] = {
+            "names": img.get("Names", []),
+            "size": img.get("Size"),
+            "created_at": img.get("CreatedAt"),
+            "digest": img.get("Digest"),
+            "containers": img.get("Containers", 0),
+            "labels": img.get("Labels", {})
+        }
+
+    return images
+
+
+def podman_img_exists(img) -> bool:
+    all_img_names = [
+            x
+            for xs in [i["names"] for i in parse_podman_images().values()]
+            for x in xs
+    ]
+    return img in all_img_names
+
+
+def get_imgs_to_pull(conts: list):
+    images = [
+            i.removeprefix("FROM ")
+            for j in [i["rendered"].splitlines() for i in conts]
+            for i in j
+            if i.startswith("FROM ")
+    ]
+    return images
+
+
+def parse_toolbox_list() -> dict:
+    """Parse output of 'toolbox list' and return container and image status."""
+    try:
+        result = subprocess.run(["toolbox", "list"], capture_output=True, text=True, check=True)
+    except subprocess.CalledProcessError as e:
+        logging.error(f"Failed to run 'toolbox list': {e.stderr}")
+        return {"images": [], "containers": []}
+
+    lines = result.stdout.split("\n")
+    images = []
+    containers = []
+    section = None
+    col_positions = []
+    col_names = []
+
+    for line in lines:
+        if not line.strip():
+            continue
+
+        if line.startswith("IMAGE ID"):
+            section = "images"
+            col_names = ["IMAGE ID", "IMAGE NAME", "CREATED"]
+            col_positions = [line.find(name) for name in col_names]
+            continue
+        elif line.startswith("CONTAINER ID"):
+            section = "containers"
+            col_names = ["CONTAINER ID", "CONTAINER NAME", "CREATED", "STATUS", "IMAGE NAME"]
+            col_positions = [line.find(name) for name in col_names]
+            continue
+
+        if not col_positions or line.startswith(("IMAGE", "CONTAINER")):
+            continue
+
+        row = {}
+        for i, col_name in enumerate(col_names):
+            start = col_positions[i]
+            end = col_positions[i + 1] if i + 1 < len(col_positions) else len(line)
+            row[col_name] = line[start:end].strip()
+
+        if section == "images":
+            images.append({"id": row["IMAGE ID"], "name": row["IMAGE NAME"], "created": row["CREATED"]})
+        elif section == "containers":
+            containers.append({
+                "id": row["CONTAINER ID"],
+                "name": row["CONTAINER NAME"],
+                "created": row["CREATED"],
+                "status": row["STATUS"],
+                "image": row["IMAGE NAME"]
+            })
+
+    return {
+        "images": images,
+        "containers": containers
+    }
+
+
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--force", action="store_true")
+    return parser.parse_args()
+
+
+def parse_config() -> tuple[Type[configparser.SectionProxy], dict]:
+    conf_dir = Path.home() / ".config" / "tlbx-cattle"
+    files_dir = conf_dir / "files"
+    tmpl_dir = conf_dir / "templates"
+    cache_dir = Path.home() / ".cache" / "tlbx-cattle"
+
+    config = ConfigParser(interpolation=ExtendedInterpolation())
+    config.read(conf_dir / "cattle.conf")
+
+    if "cattle" not in config.sections():
+        config.add_section("cattle")
+
+    cont_secs = [s for s in config.sections() if s.startswith("cont/")]
+    env = Environment(loader=FileSystemLoader(tmpl_dir), undefined=StrictUndefined)
+    herd = dict()
+
+    for s in cont_secs:
+        s_short = s.removeprefix("cont/")
+        releases = config[s].pop("releases", "")
+        try:
+            sec = dict(config[s])
+        except InterpolationMissingOptionError as e:
+            logging.warning(e)
+            continue
+        varss = dict()
+        if releases:
+            releases = [i for i in releases.split()]
+            varss["release"] = releases[0]
+        else:
+            releases = [""]
+
+        for var in [i for i in sec if i.startswith("var.")]:
+            varss[var[4:]] = sec.pop(var)
+
+        # Checks
+        if "template" not in config[s]:
+            logging.warning(f"""No "template" key in "{s}" section. Skipping...""")
+            continue
+
+        if not os.path.isfile(tmpl_dir / config[s]["template"]):
+            msg = f"""For "cont/{s}", couldn't find template "{config[s]["template"]}". Skipping..."""
+            logging.warning(msg)
+            continue
+
+        t_src = env.loader.get_source(env, config[s]["template"])[0]
+        parsed = env.parse(t_src)
+        jinja_vars = meta.find_undeclared_variables(parsed)
+        missing = set(jinja_vars) - set(varss)
+        if missing:
+            m_s = ", ".join(missing)
+            msg = f"""For "cont/{s}", these vars need to be declared: {m_s}. Skipping..."""
+            logging.warning(msg)
+            continue
+
+        # Create containers (cont/ sections * releases)
+        for rel in releases:
+            cont_name = f"{s_short}-{rel}" if rel else s_short
+            herd[cont_name] = sec.copy()
+            herd[cont_name]["vars"] = varss.copy()
+            if rel:
+                herd[cont_name]["release"] = rel
+                herd[cont_name]["vars"]["release"] = rel
+
+    for c in herd:
+        tfile = herd[c]["template"]
+        try:
+            herd[c]["rendered"] = env.get_template(tfile).render(herd[c]["vars"])
+        except jinja2.exceptions.TemplateNotFound as e:
+            raise(e)
+
+    current_status = parse_toolbox_list()
+
+    # Map containers in herd to actual containers and images
+    image_map = {img["name"]: img["id"] for img in current_status["images"]}
+    container_map = {cont["name"]: cont for cont in current_status["containers"]}
+
+    for cont_name in herd:
+        exists = cont_name in container_map
+        herd[cont_name]["exists"] = exists
+        if exists:
+            cont = container_map[cont_name]
+            herd[cont_name]["container_id"] = cont["id"]
+            herd[cont_name]["container_status"] = cont["status"]
+            herd[cont_name]["image_name_cur"] = cont["image"]
+            herd[cont_name]["image_id"] = image_map.get(cont["image"])
+        else:
+            herd[cont_name]["container_status"] = None
+
+    return config["cattle"], herd
+
+
+def rebuild(details):
+    cache_dir = Path.home() / ".cache" / "tlbx-cattle" / details["name"]
+    files_dir = Path.home() / ".config" / "tlbx-cattle" / "files"
+
+    name = details["name"]
+    img_name_build, img_name_cur, img_name_old = [
+            f"localhost/{name}:{i}" for i in ["build", "current", "old"]
+    ]
+
+    if podman_img_exists(img_name_build):
+        msg = f"There's {img_name}:build present, skipping to build {name}"
+        return name, "skipped", msg
+
+    try:
+        shutil.rmtree(cache_dir)
+    except FileNotFoundError:
+        pass
+
+    os.makedirs(cache_dir.parent, exist_ok=True)
+    #subprocess.run(["cp", "-r", files_dir, cache_dir], check=True)
+    shutil.copytree(files_dir, cache_dir)
+
+    # copy local files
+    # copy local dirs
+
+    with open(cache_dir / "Containerfile", "w") as f:
+        f.write(details["rendered"])
+        f.write("\n")
+
+    # build
+    podman_cli = [
+            "podman",
+            "build",
+            "--squash",
+            "--tag",
+            img_name_build,
+            cache_dir
+    ]
+    build_res = subprocess.run(podman_cli, capture_output=True, encoding="utf8")
+    if build_res.returncode != 0:
+        stdout_tail = build_res.stdout.splitlines()[-20:]
+        stderr_tail = build_res.stderr.splitlines()[-20:]
+        msg_lines = [
+                f"Failed to build an image for {name}. The CLI of podman:",
+                " ".join([str(i) for i in build_res.args]),
+                "The stderr of podman:",
+                *stderr_tail,
+                "---",
+                "The last lines of podman build:",
+                *stdout_tail,
+        ]
+        msg = "\n".join(msg_lines)
+        raise PodmanBuildError(msg)
+
+    subprocess.run(["toolbox", "rm", name])
+    if podman_img_exists(img_name_old):
+        subprocess.run(["podman", "image", "rm", img_name_old], check=True)
+    if "img_name_cur" in details:
+        subprocess.run(
+                ["podman", "image", "rm", details["img_name_cur"]], check=True
+        )
+
+    if podman_img_exists(img_name_cur):
+        subprocess.run(
+                ["podman", "image", "tag", img_name_cur, img_name_old], check=True
+        )
+        subprocess.run(
+                ["podman", "image", "untag", img_name_old, img_name_cur], check=True
+        )
+    subprocess.run(
+            ["podman", "image", "tag", img_name_build, img_name_cur], check=True
+    )
+    subprocess.run(
+            ["podman", "image", "untag", img_name_cur, img_name_build], check=True
+    )
+    subprocess.run(["toolbox", "create", "--image", img_name_cur, name], check=True)
+
+    return name
+
+
+def main():
+    default_workers = 2
+
+    if os.path.exists("/run/.containerenv"):
+        log.error("Can't run in a container")
+        sys.exit(1)
+
+    args = parse_args()
+    cfg, herd = parse_config()
+    workers = cfg.getint("parallel_builds", default_workers)
+
+    excluded = set()
+    running =[i for i in herd if herd[i]["container_status"] == "running"]
+
+    if not args.force:
+        excluded.update(running)
+        for i in running:
+            logging.warn(f"Container {i} running, skipping the rebuild")
+
+    rebuild_conts = [{"name": i, **j} for i, j in herd.items() if i not in excluded]
+
+    # update images
+    to_pull = get_imgs_to_pull(rebuild_conts)
+    pp(to_pull)
+    subprocess.run(["podman", "pull", *to_pull], check=True)
+
+    rebuild(rebuild_conts[0])
+
+    ## FIXME remove this to switch back to parallel
+    #sys.exit(0)
+
+    completed = []
+    failed = dict()
+    with concurrent.futures.ProcessPoolExecutor(max_workers=5) as exe:
+        future_to_names = {exe.submit(rebuild, i): i["name"] for i in rebuild_conts}
+        for future in concurrent.futures.as_completed(future_to_names):
+            name = future_to_names[future]
+            try:
+                completed.append(future.result())
+            except Exception as e:
+                f = e
+                failed[name] = f
+
+    pp(f"{completed=}")
+    pp("-----")
+    pp(failed)
+
+
+if __name__ == "__main__":
+    main()
