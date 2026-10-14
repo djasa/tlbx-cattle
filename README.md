@@ -2,7 +2,7 @@
 
 The _Container toolbx_ is for pet containers but pets get sometimes unwieldy. The `tlbx-cattle` comes to the rescue! Set up a `Containerfile` template, have it filled with variables defined in a config file, fire `tlbx-cattle` and have your containers created or rebuilt!
 
-### Set up:
+### Set up
 
 Create config directories:
 ```
@@ -60,13 +60,35 @@ var.my_lines = COPY /internal-certs.pem /etc/pki/ca-trust/source/anchors/
 EOF
 ```
 
-### Run:
+#### Special variables
+
+* `{{release}}`: possible to specify as `--release` on CLI
+
+### Run
 
 ```
 tlbx-cattle
 ```
 
-We end up with a trio of new containers, `fedora-45` and `fedora-rawhide` from `[cont/fedora]` config file section thanks to use of `releases` and `special` from `[cont/special]`.
+We end up with a trio of new containers, `fedora-45` and `fedora-rawhide` from `[cont/fedora]` config file section thanks to use of `releases` and `special` from `[cont/special]`. Enter one of them and try to do your stuff:
+```
+toolbox enter fedora-45
+## your stuff
+```
+
+something is missing, you update your template or config and rebuild with `tlbx-cattle` again but then:
+```
+tlbx cattle
+...
+Containers rebuilt: fedora-rawhide special
+Containers skipped: fedora-45
+```
+
+That is because the running containers are skipped unless called with `--force`. To stop the container, use `podman`:
+```
+podman stop fedora-45
+```
+We also skip building containers if jinja fails to fill your template.
 
 Under the hood, we:
 * pull new versions of base images
@@ -76,7 +98,3 @@ Under the hood, we:
 * last, we prune untagged images by `podman image prune --force`
 
 This way, it's possible to recreate a container from the `:old` image in case it doesn't work and we don't occupy much more disk space than strictly needed.
-
-### Special variables:
-
-* `{{release}}`: possible to specify as `--release` on CLI
