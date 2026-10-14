@@ -4,20 +4,43 @@ The _Container toolbx_ is for pet containers but pets get sometimes unwieldy. Th
 
 ### Set up:
 
+Create config directories:
 ```
 cp tlbx-cattle ~/.local/bin/
 
 mkdir -p ~/.config/tlbx-cattle/{files,templates}
+```
 
+Add a custom file that you want to copy into containers:
+```
 cat > ~/.config/tlbx-cattle/files/my.repo << EOF
 [my-repo]
 name=My packages
 baseurl=https://dnf.example.org
 EOF
+```
 
+Create a jinja2 template for Containerfile:
+```
+cat > ~/.config/tlbx-cattle/templates/fedora << EOF
+FROM registry.fedoraproject.org/fedora-toolbox:{{release}}
+COPY /my.repo /etc/yum.repos.d/
+RUN dnf -y install {{pkgs}}
+EOF
+
+cat > ~/.config/tlbx-cattle/templates/private << EOF
+FROM company.example.org/internal-image
+{{ my_lines }}
+RUN dnf -y install {{pkgs}}
+EOF
+```
+
+Only few variables for the template is defined by `tlbx-cattle`. Others are yours to fill in the container definitions in the config file using `var.`-prefixed keys in `cont` sections of the config file:
+
+```
 cat > ~/.config/tlbx-cattle/cattle.conf << EOF
 [cattle]
-parallel_builds = 2
+parallel_builds = 4
 
 [my_vars]
 base_pkgs = black vim
@@ -30,15 +53,10 @@ releases = 45 rawhide
 var.pkgs = ${my_vars.base_pkgs} ${my_vars.my_pkgs}
 
 [cont/special]
-template = fedora
-releases = rawhide
+template = special
 var.pkgs = ${my_vars.base_pkgs} ${my_vars.my_other_pkgs}
-EOF
-
-cat > ~/.config/tlbx-cattle/templates/fedora << EOF
-FROM registry.fedoraproject.org/fedora-toolbox:{{release}}
-COPY /my.repo /etc/yum.repos.d/
-RUN dnf -y install {{pkgs}}
+var.my_lines = COPY /internal-certs.pem /etc/pki/ca-trust/source/anchors/
+    RUN update-ca-trust
 EOF
 ```
 
@@ -48,14 +66,17 @@ EOF
 tlbx-cattle
 ```
 
-These stopped containers will be rebuilt: `fedora-45`, `fedora-rawhide`, `special`, based off of images:
-```
-localhost/fedora-45:current
-localhost/fedora-rawhide:current
-localhost/special:current
-```
-Previous images are retagged as `:old` to enable reverting, new image is tagged `:build`. Old images are then pruned using `podman`.
+We end up with a trio of new containers, `fedora-45` and `fedora-rawhide` from `[cont/fedora]` config file section thanks to use of `releases` and `special` from `[cont/special]`.
+
+Under the hood, we:
+* pull new versions of base images
+* create a new `localhost/CONT_NAME:build` image for each resulting container
+* after success, we retag existing `localhost/CONT_NAME:current` as `:old`, then `:build` as `:current`
+* then we remove current container and base new off of the `:current` image again
+* last, we prune untagged images by `podman image prune --force`
+
+This way, it's possible to recreate a container from the `:old` image in case it doesn't work and we don't occupy much more disk space than strictly needed.
 
 ### Special variables:
 
-  * `{{release}}`: possible to specify as `--release` on CLI
+* `{{release}}`: possible to specify as `--release` on CLI
