@@ -182,7 +182,7 @@ def parse_config() -> tuple[Type[configparser.SectionProxy], dict]:
         t_src = env.loader.get_source(env, config[s]["template"])[0]
         parsed = env.parse(t_src)
         jinja_vars = meta.find_undeclared_variables(parsed)
-        missing = set(jinja_vars) - set(varss)
+        missing = set(jinja_vars) - set(varss) - {"cont_name"}
         if missing:
             m_s = ", ".join(missing)
             msg = f"""For "cont/{s}", these vars need to be declared: {m_s}. Skipping..."""
@@ -193,10 +193,11 @@ def parse_config() -> tuple[Type[configparser.SectionProxy], dict]:
         for rel in releases:
             cont_name = f"{s_short}-{rel}" if rel else s_short
             herd[cont_name] = sec.copy()
-            herd[cont_name]["vars"] = varss.copy()
+            herd[cont_name]["vars"] = {"cont_name": cont_name}
             if rel:
                 herd[cont_name]["release"] = rel
                 herd[cont_name]["vars"]["release"] = rel
+            herd[cont_name]["vars"].update(**varss)
 
     for c in herd:
         tfile = herd[c]["template"]
@@ -332,7 +333,8 @@ def main():
     # update images
     logging.info("Pulling new versions of relevant base images..")
     to_pull = get_imgs_to_pull(rebuild_conts)
-    subprocess.run(["podman", "pull", *to_pull], check=True)
+    if len(to_pull):
+        subprocess.run(["podman", "pull", *to_pull], check=True)
     logging.info("Finished updating base images\n")
     logging.info(f"These containers will be built: {", ".join([i["name"] for i in rebuild_conts])}")
 

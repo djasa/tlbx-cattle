@@ -62,7 +62,8 @@ EOF
 
 #### Special variables
 
-* `{{release}}`: possible to specify as `--release` on CLI
+* `{{cont_name}}`: the final container name. Note however that `/etc/hostname` is set by `podman`/`toolbox` so it's only useful for other files
+* `{{release}}`: the release of the container (if `releases` is specified in the `cont/NAME` section)
 
 ### Run
 
