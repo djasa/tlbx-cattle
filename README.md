@@ -24,12 +24,14 @@ Create a jinja2 template for Containerfile:
 ```
 cat > ~/.config/tlbx-cattle/templates/fedora << EOF
 FROM registry.fedoraproject.org/fedora-toolbox:{{release}}
+RUN hostname {{cont_name}}
 COPY /my.repo /etc/yum.repos.d/
 RUN dnf -y install {{pkgs}}
 EOF
 
 cat > ~/.config/tlbx-cattle/templates/private << EOF
 FROM company.example.org/internal-image
+RUN hostname {{cont_name}}
 {{ my_lines }}
 RUN dnf -y install {{pkgs}}
 EOF
@@ -62,7 +64,8 @@ EOF
 
 #### Special variables
 
-* `{{release}}`: possible to specify as `--release` on CLI
+* `{{cont_name}}`: the final container name
+* `{{release}}`: the release of the container (if `releases` is specified in the `cont/NAME` section)
 
 ### Run
 
