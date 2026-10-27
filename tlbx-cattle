@@ -300,7 +300,7 @@ def rebuild(details):
         raise PodmanBuildError(msg)
 
     if details["exists"]:
-        subprocess.run(["toolbox", "rm", name], capture_output=True, check=True)
+        subprocess.run(["toolbox", "rm", "-f", name], capture_output=True, check=True)
     if podman_img_exists(img_name_old):
         rm_image = ["podman", "image", "rm", "-f", img_name_old]
         subprocess.run(rm_image, capture_output=True, check=True)
@@ -326,7 +326,6 @@ def rebuild(details):
             capture_output=True,
             check=True,
     )
-    logging.info(f"Finished building container: {name}")
 
 
 def main():
@@ -375,7 +374,7 @@ def main():
                 logging.warning(msg)
             except Exception as e:
                 logging.error(f"Failed building {name} with error:\n{e}")
-                failed["name"] = e
+                failed[name] = e
 
         concurrent.futures.wait(future_to_names)
 
@@ -390,6 +389,7 @@ def main():
             f"Containers failed: {", ".join(failed)}",
     ]
     logging.info("\n".join(msg_lines))
+
 
 if __name__ == "__main__":
     main()
