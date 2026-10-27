@@ -146,7 +146,8 @@ def parse_toolbox_list() -> dict:
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--force", action="store_true")
+    help_force = "stop and rebuild running containers, too"
+    parser.add_argument("-f", "--force", action="store_true", help=help_force)
     return parser.parse_args()
 
 
@@ -301,7 +302,7 @@ def rebuild(details):
     if details["exists"]:
         subprocess.run(["toolbox", "rm", name], capture_output=True, check=True)
     if podman_img_exists(img_name_old):
-        rm_image = ["podman", "image", "rm", img_name_old]
+        rm_image = ["podman", "image", "rm", "-f", img_name_old]
         subprocess.run(rm_image, capture_output=True, check=True)
     if "img_name_cur" in details:
         rm_image = ["podman", "image", "rm", details["img_name_cur"]]
@@ -320,7 +321,12 @@ def rebuild(details):
     subprocess.run(
             ["podman", "image", "untag", img_name_cur, img_name_build], check=True
     )
-    subprocess.run(["toolbox", "create", "--image", img_name_cur, name], check=True)
+    subprocess.run(
+            ["toolbox", "create", "--image", img_name_cur, name],
+            capture_output=True,
+            check=True,
+    )
+    logging.info(f"Finished building container: {name}")
 
 
 def main():
