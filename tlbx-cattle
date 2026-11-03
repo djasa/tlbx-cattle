@@ -31,6 +31,8 @@ from pathlib import Path
 from traceback import format_exc
 
 import pprint
+
+
 def pp(*args, **kw):
     kw["width"] = shutil.get_terminal_size().columns
     pprint.pp(*args, **kw)
@@ -63,27 +65,23 @@ def parse_podman_images() -> dict:
             "created_at": img.get("CreatedAt"),
             "digest": img.get("Digest"),
             "containers": img.get("Containers", 0),
-            "labels": img.get("Labels", {})
+            "labels": img.get("Labels", {}),
         }
 
     return images
 
 
 def podman_img_exists(img) -> bool:
-    all_img_names = [
-            x
-            for xs in [i["names"] for i in parse_podman_images().values()]
-            for x in xs
-    ]
+    all_img_names = [x for xs in [i["names"] for i in parse_podman_images().values()] for x in xs]
     return img in all_img_names
 
 
 def get_imgs_to_pull(conts: list):
     images = [
-            i.removeprefix("FROM ")
-            for j in [i["rendered"].splitlines() for i in conts]
-            for i in j
-            if i.startswith("FROM ")
+        i.removeprefix("FROM ")
+        for j in [i["rendered"].splitlines() for i in conts]
+        for i in j
+        if i.startswith("FROM ")
     ]
     return images
 
@@ -128,20 +126,21 @@ def parse_toolbox_list() -> dict:
             row[col_name] = line[start:end].strip()
 
         if section == "images":
-            images.append({"id": row["IMAGE ID"], "name": row["IMAGE NAME"], "created": row["CREATED"]})
+            images.append(
+                {"id": row["IMAGE ID"], "name": row["IMAGE NAME"], "created": row["CREATED"]}
+            )
         elif section == "containers":
-            containers.append({
-                "id": row["CONTAINER ID"],
-                "name": row["CONTAINER NAME"],
-                "created": row["CREATED"],
-                "status": row["STATUS"],
-                "image": row["IMAGE NAME"]
-            })
+            containers.append(
+                {
+                    "id": row["CONTAINER ID"],
+                    "name": row["CONTAINER NAME"],
+                    "created": row["CREATED"],
+                    "status": row["STATUS"],
+                    "image": row["IMAGE NAME"],
+                }
+            )
 
-    return {
-        "images": images,
-        "containers": containers
-    }
+    return {"images": images, "containers": containers}
 
 
 def parse_args():
@@ -234,7 +233,7 @@ def parse_config() -> tuple[Type[configparser.SectionProxy], dict]:
         try:
             herd[c]["rendered"] = env.get_template(tfile).render(herd[c]["vars"])
         except jinja2.exceptions.TemplateNotFound as e:
-            raise(e)
+            raise (e)
 
     current_status = parse_toolbox_list()
 
@@ -294,7 +293,7 @@ def rebuild(details):
 
     name = details["name"]
     img_name_build, img_name_cur, img_name_old = [
-            f"localhost/{name}:{i}" for i in ["build", "current", "old"]
+        f"localhost/{name}:{i}" for i in ["build", "current", "old"]
     ]
 
     if podman_img_exists(img_name_build):
@@ -307,7 +306,7 @@ def rebuild(details):
         pass
 
     os.makedirs(cache_dir.parent, exist_ok=True)
-    #subprocess.run(["cp", "-r", files_dir, cache_dir], check=True)
+    # subprocess.run(["cp", "-r", files_dir, cache_dir], check=True)
     shutil.copytree(files_dir, cache_dir)
 
     # copy local files
@@ -319,26 +318,19 @@ def rebuild(details):
 
     # build
     logging.info(f"Starting to build container: {name}")
-    podman_cli = [
-            "podman",
-            "build",
-            "--squash",
-            "--tag",
-            img_name_build,
-            cache_dir
-    ]
+    podman_cli = ["podman", "build", "--squash", "--tag", img_name_build, cache_dir]
     build_res = subprocess.run(podman_cli, capture_output=True, encoding="utf8")
     if build_res.returncode != 0:
         stdout_tail = build_res.stdout.splitlines()[-20:]
         stderr_tail = build_res.stderr.splitlines()[-20:]
         msg_lines = [
-                f"Failed to build an image for {name}. The CLI of podman:",
-                " ".join([str(i) for i in build_res.args]),
-                "The stderr of podman:",
-                *stderr_tail,
-                "---",
-                "The last lines of podman build:",
-                *stdout_tail,
+            f"Failed to build an image for {name}. The CLI of podman:",
+            " ".join([str(i) for i in build_res.args]),
+            "The stderr of podman:",
+            *stderr_tail,
+            "---",
+            "The last lines of podman build:",
+            *stdout_tail,
         ]
         msg = "\n".join(msg_lines)
         raise PodmanBuildError(msg)
@@ -353,22 +345,14 @@ def rebuild(details):
         subprocess.run(rm_image, capture_output=True, check=True)
 
     if podman_img_exists(img_name_cur):
-        subprocess.run(
-                ["podman", "image", "tag", img_name_cur, img_name_old], check=True
-        )
-        subprocess.run(
-                ["podman", "image", "untag", img_name_old, img_name_cur], check=True
-        )
+        subprocess.run(["podman", "image", "tag", img_name_cur, img_name_old], check=True)
+        subprocess.run(["podman", "image", "untag", img_name_old, img_name_cur], check=True)
+    subprocess.run(["podman", "image", "tag", img_name_build, img_name_cur], check=True)
+    subprocess.run(["podman", "image", "untag", img_name_cur, img_name_build], check=True)
     subprocess.run(
-            ["podman", "image", "tag", img_name_build, img_name_cur], check=True
-    )
-    subprocess.run(
-            ["podman", "image", "untag", img_name_cur, img_name_build], check=True
-    )
-    subprocess.run(
-            ["toolbox", "create", "--image", img_name_cur, name],
-            capture_output=True,
-            check=True,
+        ["toolbox", "create", "--image", img_name_cur, name],
+        capture_output=True,
+        check=True,
     )
 
 
@@ -392,7 +376,7 @@ def main():
     workers = cfg.getint("parallel_builds", default_workers)
 
     excluded = dict()
-    running =[i for i in herd if herd[i]["container_status"] == "running"]
+    running = [i for i in herd if herd[i]["container_status"] == "running"]
 
     if not args.force:
         excluded.update({i: "running" for i in running})
@@ -407,7 +391,9 @@ def main():
     if len(to_pull):
         subprocess.run(["podman", "pull", *to_pull], check=True)
     logging.info("Finished updating base images\n")
-    logging.info(f"These containers will be built: {", ".join([i["name"] for i in rebuild_conts])}")
+    logging.info(
+        f"These containers will be built: {", ".join([i["name"] for i in rebuild_conts])}"
+    )
 
     completed = []
     failed = dict()
@@ -434,10 +420,10 @@ def main():
 
     logging.info(f"Completed building of containers: {', '.join(completed)}")
     msg_lines = [
-            "Finished running.",
-            f"Containers rebuilt: {", ".join(completed)}",
-            f"Containers skipped: {", ".join(excluded)}",
-            f"Containers failed: {", ".join(failed)}",
+        "Finished running.",
+        f"Containers rebuilt: {", ".join(completed)}",
+        f"Containers skipped: {", ".join(excluded)}",
+        f"Containers failed: {", ".join(failed)}",
     ]
     logging.info("\n".join(msg_lines))
 
