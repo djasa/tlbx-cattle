@@ -333,7 +333,7 @@ def main():
     logging.basicConfig(level=logging.INFO)
 
     if os.path.exists("/run/.containerenv"):
-        log.error("Can't run in a container")
+        logging.error("Can't run in a container")
         sys.exit(1)
 
     args = parse_args()
@@ -383,7 +383,7 @@ def main():
 
     logging.info(f"Completed building of containers: {', '.join(completed)}")
     msg_lines = [
-            "Finshed running.",
+            "Finished running.",
             f"Containers rebuilt: {", ".join(completed)}",
             f"Containers skipped: {", ".join(excluded)}",
             f"Containers failed: {", ".join(failed)}",
