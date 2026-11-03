@@ -146,8 +146,19 @@ def parse_toolbox_list() -> dict:
 
 def parse_args():
     parser = argparse.ArgumentParser()
+    subparsers = parser.add_subparsers(dest="command", help="subcommand to run")
+
+    # Default build command (no subcommand)
+    build_parser = subparsers.add_parser("build", help="build containers (default)")
     help_force = "stop and rebuild running containers, too"
+    build_parser.add_argument("-f", "--force", action="store_true", help=help_force)
+
+    # List command
+    subparsers.add_parser("list", help="list defined containers")
+
+    # For backwards compatibility, allow -f/--force without subcommand
     parser.add_argument("-f", "--force", action="store_true", help=help_force)
+
     return parser.parse_args()
 
 
@@ -243,6 +254,23 @@ def parse_config() -> tuple[Type[configparser.SectionProxy], dict]:
     return config["cattle"], herd
 
 
+def list_containers(herd):
+    """Display all defined containers."""
+    if not herd:
+        print("No containers defined in configuration")
+        return
+
+    print(f"{'Container':<20} {'Template':<15} {'Status':<12}")
+    print("-" * 47)
+    for name in sorted(herd.keys()):
+        cont = herd[name]
+        template = cont.get("template", "N/A")
+        status = cont.get("container_status", "not created")
+        if status is None:
+            status = "not created"
+        print(f"{name:<20} {template:<15} {status:<12}")
+
+
 def rebuild(details):
     cache_dir = Path.home() / ".cache" / "tlbx-cattle" / details["name"]
     files_dir = Path.home() / ".config" / "tlbx-cattle" / "files"
@@ -332,11 +360,18 @@ def main():
     default_workers = 2
     logging.basicConfig(level=logging.INFO)
 
+    args = parse_args()
+
     if os.path.exists("/run/.containerenv"):
         logging.error("Can't run in a container")
         sys.exit(1)
 
-    args = parse_args()
+    # Handle list command
+    if args.command == "list":
+        cfg, herd = parse_config()
+        list_containers(herd)
+        return
+
     cfg, herd = parse_config()
     workers = cfg.getint("parallel_builds", default_workers)
 
