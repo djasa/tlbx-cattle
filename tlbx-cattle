@@ -260,15 +260,28 @@ def list_containers(herd):
         print("No containers defined in configuration")
         return
 
-    print(f"{'Container':<20} {'Template':<15} {'Status':<12}")
-    print("-" * 47)
+    headers = ("Container", "Template", "Status")
+    rows = []
     for name in sorted(herd.keys()):
         cont = herd[name]
         template = cont.get("template", "N/A")
         status = cont.get("container_status", "not created")
         if status is None:
             status = "not created"
-        print(f"{name:<20} {template:<15} {status:<12}")
+        rows.append((name, template, status))
+
+    # Calculate column widths
+    widths = [len(h) for h in headers]
+    for row in rows:
+        for i, cell in enumerate(row):
+            widths[i] = max(widths[i], len(cell))
+
+    # Print table
+    fmt = "  ".join(f"{{:<{w}}}" for w in widths)
+    print(fmt.format(*headers))
+    print("-" * (sum(widths) + len(widths) * 2 - 2))
+    for row in rows:
+        print(fmt.format(*row))
 
 
 def rebuild(details):
