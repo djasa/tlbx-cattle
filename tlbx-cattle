@@ -198,11 +198,11 @@ def parse_config() -> tuple[Type[configparser.SectionProxy], dict]:
 
         # Checks
         if "template" not in config[s]:
-            logging.warning(f"""No "template" key in "{s}" section. Skipping...""")
+            logging.warning(f"""No "template" key in [{s}] section. Skipping...""")
             continue
 
         if not os.path.isfile(tmpl_dir / config[s]["template"]):
-            msg = f"""For "cont/{s}", couldn't find template "{config[s]["template"]}". Skipping..."""
+            msg = f"For [{s}], couldn't find template {config[s]["template"]}. Skipping..."
             logging.warning(msg)
             continue
 
@@ -212,8 +212,11 @@ def parse_config() -> tuple[Type[configparser.SectionProxy], dict]:
         missing = set(jinja_vars) - set(varss) - {"cont_name"}
         if missing:
             m_s = ", ".join(missing)
-            msg = f"""For "cont/{s}", these vars need to be declared: {m_s}. Skipping..."""
+            msg = f"""For "{s}" section, these vars need to be declared: {m_s}. Skipping..."""
             logging.warning(msg)
+            if "release" in missing:
+                msg = f"Neither releases nor vars.release defined in [{s}] but required by the {config[s]["template"]} template"
+                logging.warning(msg)
             continue
 
         # Create containers (cont/ sections * releases)
