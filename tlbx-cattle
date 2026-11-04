@@ -251,7 +251,7 @@ def parse_config() -> tuple[Type[configparser.SectionProxy], dict]:
             herd[cont_name]["image_name_cur"] = cont["image"]
             herd[cont_name]["image_id"] = image_map.get(cont["image"])
         else:
-            herd[cont_name]["container_status"] = None
+            herd[cont_name]["container_status"] = "not created"
 
     return config["cattle"], herd
 
@@ -267,9 +267,7 @@ def list_containers(herd):
     for name in sorted(herd.keys()):
         cont = herd[name]
         template = cont.get("template", "N/A")
-        status = cont.get("container_status", "not created")
-        if status is None:
-            status = "not created"
+        status = cont.get("container_status")
         rows.append((name, template, status))
 
     # Calculate column widths
