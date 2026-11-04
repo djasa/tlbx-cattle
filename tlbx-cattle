@@ -180,6 +180,8 @@ def parse_config() -> tuple[Type[configparser.SectionProxy], dict]:
     for s in cont_secs:
         s_short = s.removeprefix("cont/")
         releases = config[s].pop("releases", "")
+        skip = config[s].getboolean("skip", fallback=False)
+        config[s].pop("skip", None)
         try:
             sec = dict(config[s])
         except InterpolationMissingOptionError as e:
@@ -222,6 +224,7 @@ def parse_config() -> tuple[Type[configparser.SectionProxy], dict]:
         for rel in releases:
             cont_name = f"{s_short}-{rel}" if rel else s_short
             herd[cont_name] = sec.copy()
+            herd[cont_name]["skip"] = skip
             herd[cont_name]["vars"] = {"cont_name": cont_name}
             if rel:
                 herd[cont_name]["release"] = rel
@@ -380,6 +383,15 @@ def main():
         excluded.update({i: "running" for i in running})
         for i in running:
             logging.warning(f"Container {i} running, skipping the rebuild")
+
+    skipped = [
+        i
+        for i in herd
+        if herd[i].get("skip", False) and herd[i]["container_status"] == "not created"
+    ]
+    excluded.update({i: "skip" for i in skipped})
+    for i in skipped:
+        logging.info(f"Container {i} marked with skip=true, skipping the rebuild")
 
     rebuild_conts = [{"name": i, **j} for i, j in herd.items() if i not in excluded]
 
