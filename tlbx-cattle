@@ -294,7 +294,7 @@ def rebuild(details):
 
     name = details["name"]
     img_name_build, img_name_cur, img_name_old = [
-        f"localhost/{name}:{i}" for i in ["build", "current", "old"]
+        f"localhost/cattle/{name}:{i}" for i in ["build", "current", "old"]
     ]
 
     if podman_img_exists(img_name_build):
