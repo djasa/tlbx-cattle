@@ -440,6 +440,12 @@ def main():
                 logging.error("No valid containers or sections specified")
                 sys.exit(1)
 
+        # Override skip=true for explicitly specified containers
+        skip_overridden = [c for c in target_containers if excluded.get(c) == "skip"]
+        for c in skip_overridden:
+            del excluded[c]
+            logging.info(f"Container {c} explicitly specified, overriding skip=true")
+
         # Exclude all containers NOT in the target set
         non_targeted = [c for c in herd if c not in target_containers]
         excluded.update({c: "not specified" for c in non_targeted})
