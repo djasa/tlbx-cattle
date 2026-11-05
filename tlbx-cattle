@@ -299,9 +299,10 @@ def rebuild(details):
     logging.basicConfig(level=logging.INFO)
 
     name = details["name"]
-    img_name_build, img_name_cur, img_name_old = [
-        f"localhost/cattle/{name}:{i}" for i in ["build", "current", "old"]
-    ]
+    img_name_base = f"localhost/cattle/{name}"
+    img_name_build = f"{img_name_base}:build"
+    img_name_cur = f"{img_name_base}:current"
+    img_name_old = f"{img_name_base}:old"
 
     if podman_img_exists(img_name_build):
         msg = f"There's {img_name_build} present, skipping to build {name}"
@@ -344,12 +345,31 @@ def rebuild(details):
 
     if details["exists"]:
         subprocess.run(["toolbox", "rm", "-f", name], capture_output=True, check=True)
-    if podman_img_exists(img_name_old):
-        rm_image = ["podman", "image", "rm", "-f", img_name_old]
-        subprocess.run(rm_image, capture_output=True, check=True)
-    if "img_name_cur" in details:
-        rm_image = ["podman", "image", "rm", details["img_name_cur"]]
-        subprocess.run(rm_image, capture_output=True, check=True)
+
+        # Get the current image name and derive the old image name from it
+        if "image_name_cur" in details and details["image_name_cur"]:
+            current_img = details["image_name_cur"]
+
+            # Derive old image name by changing :current to :old
+            # This works regardless of the naming scheme used
+            if ":current" in current_img:
+                old_img = current_img.replace(":current", ":old")
+            else:
+                # Fallback: replace the tag portion with :old
+                base = current_img.rsplit(":", 1)[0] if ":" in current_img else current_img
+                old_img = f"{base}:old"
+
+            # Remove the old image if it exists
+            if podman_img_exists(old_img):
+                rm_image = ["podman", "image", "rm", "-f", old_img]
+                subprocess.run(rm_image, capture_output=True, check=True)
+
+            # If naming scheme changed, tag current image with new scheme
+            if current_img != img_name_cur:
+                subprocess.run(
+                    ["podman", "image", "tag", current_img, img_name_cur],
+                    check=True,
+                )
 
     if podman_img_exists(img_name_cur):
         subprocess.run(["podman", "image", "tag", img_name_cur, img_name_old], check=True)
