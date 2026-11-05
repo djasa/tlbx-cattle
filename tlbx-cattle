@@ -148,9 +148,15 @@ def parse_args():
     subparsers = parser.add_subparsers(dest="command", help="subcommand to run")
 
     # Default rebuild command (no subcommand)
-    rebuild_parser = subparsers.add_parser("rebuild", help="rebuild containers (default)")
+    rebuild_parser = subparsers.add_parser(
+        "rebuild", help="rebuild containers (all by default, or specific ones/sections if named)"
+    )
     help_force = "stop and rebuild running containers, too"
     rebuild_parser.add_argument("-f", "--force", action="store_true", help=help_force)
+    help_containers = "container names or config sections (e.g., fedora-45 or cont/fedora)"
+    rebuild_parser.add_argument(
+        "containers", nargs="*", metavar="CONTAINER", help=help_containers
+    )
 
     # List command
     subparsers.add_parser("list", help="list defined containers")
@@ -363,6 +369,13 @@ def main():
 
     args = parse_args()
 
+    # Handle backward compatibility: no subcommand means rebuild
+    if args.command is None:
+        args.command = "rebuild"
+        # The containers attribute only exists on rebuild_parser, add it if missing
+        if not hasattr(args, "containers"):
+            args.containers = []
+
     if os.path.exists("/run/.containerenv"):
         logging.error("Can't run in a container")
         sys.exit(1)
@@ -392,6 +405,46 @@ def main():
     excluded.update({i: "skip" for i in skipped})
     for i in skipped:
         logging.info(f"Container {i} marked with skip=true, skipping the rebuild")
+
+    # Filter by specified containers if any were provided
+    if args.command == "rebuild" and args.containers:
+        # Build target set by expanding section names and validating container names
+        target_containers = set()
+        invalid_specs = []
+
+        for spec in args.containers:
+            if spec.startswith("cont/"):
+                # Section name - expand to all containers from that section
+                section_short = spec.removeprefix("cont/")
+                matching = [
+                    c for c in herd if c.startswith(f"{section_short}-") or c == section_short
+                ]
+                if matching:
+                    target_containers.update(matching)
+                    logging.info(f"Section '{spec}' expands to: {', '.join(matching)}")
+                else:
+                    invalid_specs.append(spec)
+            else:
+                # Individual container name
+                if spec in herd:
+                    target_containers.add(spec)
+                else:
+                    invalid_specs.append(spec)
+
+        # Report invalid specifications
+        if invalid_specs:
+            for spec in invalid_specs:
+                logging.error(f"'{spec}' not found (not a valid container name or section)")
+            if len(invalid_specs) == len(args.containers):
+                # All specified items are invalid, exit
+                logging.error("No valid containers or sections specified")
+                sys.exit(1)
+
+        # Exclude all containers NOT in the target set
+        non_targeted = [c for c in herd if c not in target_containers]
+        excluded.update({c: "not specified" for c in non_targeted})
+
+        logging.info(f"Targeting containers: {', '.join(sorted(target_containers))}")
 
     rebuild_conts = [{"name": i, **j} for i, j in herd.items() if i not in excluded]
 
